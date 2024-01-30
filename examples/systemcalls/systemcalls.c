@@ -17,7 +17,13 @@ bool do_system(const char *cmd)
  *   or false() if it returned a failure
 */
 
-    return true;
+  /**
+   * system()
+   *   The value returned is -1 on error, and the return status of the command 
+   *   otherwise
+   */
+  int returnValue = system(cmd);
+  return returnValue == -1 ? false : true;
 }
 
 /**
@@ -36,18 +42,17 @@ bool do_system(const char *cmd)
 
 bool do_exec(int count, ...)
 {
-    va_list args;
-    va_start(args, count);
-    char * command[count+1];
-    int i;
-    for(i=0; i<count; i++)
-    {
-        command[i] = va_arg(args, char *);
-    }
-    command[count] = NULL;
-    // this line is to avoid a compile warning before your implementation is complete
-    // and may be removed
-    command[count] = command[count];
+  va_list args;
+  va_start(args, count);
+  char * command[count+1];
+  int i;
+
+  for(i=0; i<count; i++)
+  {
+    command[i] = va_arg(args, char *);
+  }
+
+  command[count] = NULL;
 
 /*
  * TODO:
@@ -57,11 +62,42 @@ bool do_exec(int count, ...)
  *   (first argument to execv), and use the remaining arguments
  *   as second argument to the execv() command.
  *
-*/
+ */
 
-    va_end(args);
+  if(command[0][0] != '/') 
+  {
+    return false;
+  }
 
-    return true;
+  int status;
+  pid_t pid = fork();
+
+  if(pid == -1) 
+  {
+    return false;
+  } 
+  else if(pid == 0) 
+  {
+    int returnValue = execv(command[0], command);
+
+    if(returnValue == -1)
+    {
+      return false;
+    }
+  } 
+
+  if(waitpid(pid, &status, 0) == -1)
+  {
+    return false;
+  }
+  else if(WIFEXITED(status)) 
+  {
+    return (WEXITSTATUS(status) == 0);    
+  } 
+
+  va_end(args);
+
+  return true;
 }
 
 /**
@@ -71,19 +107,15 @@ bool do_exec(int count, ...)
 */
 bool do_exec_redirect(const char *outputfile, int count, ...)
 {
-    va_list args;
-    va_start(args, count);
-    char * command[count+1];
-    int i;
-    for(i=0; i<count; i++)
-    {
-        command[i] = va_arg(args, char *);
-    }
-    command[count] = NULL;
-    // this line is to avoid a compile warning before your implementation is complete
-    // and may be removed
-    command[count] = command[count];
-
+  va_list args;
+  va_start(args, count);
+  char * command[count+1];
+  int i;
+  for(i=0; i<count; i++)
+  {
+      command[i] = va_arg(args, char *);
+  }
+  command[count] = NULL;
 
 /*
  * TODO
@@ -91,9 +123,45 @@ bool do_exec_redirect(const char *outputfile, int count, ...)
  *   redirect standard out to a file specified by outputfile.
  *   The rest of the behaviour is same as do_exec()
  *
-*/
+ */
 
-    va_end(args);
+  int status;
+  pid_t pid = fork();
 
-    return true;
+  if(pid == -1) 
+  {
+    return false;
+  } 
+  else if(pid == 0) 
+  {
+    int fd = open(outputfile , O_WRONLY | O_CREAT | O_TRUNC, 0644);
+
+    if(fd < 0)
+    {
+      return false;
+    }
+
+    dup2(fd, 1);
+    close(fd);
+
+    int returnValue = execv(command[0], command);
+
+    if(returnValue == -1)
+    {
+      return false;
+    }
+  } 
+
+  if(waitpid(pid, &status, 0) == -1)
+  {
+    return false;
+  }
+  else if(WIFEXITED(status)) 
+  {
+    return (WEXITSTATUS(status) == 0);    
+  } 
+
+  va_end(args);
+
+  return true;
 }
