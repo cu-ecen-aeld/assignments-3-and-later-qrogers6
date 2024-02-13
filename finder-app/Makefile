@@ -1,7 +1,7 @@
 CC = $(CROSS_COMPILE)gcc
 SRC = writer
 
-default: writer
+all: writer
 
 writer: writer.o
 	$(CC) -o $(SRC) $(SRC).o
