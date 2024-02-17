@@ -14,7 +14,7 @@
 
 const static char *kPort = "9000";
 const static char *kSocketData = "/var/tmp/aesdsocketdata";
-const static int kBufferSize = 100000;
+const static int kBufferSize = 1000000;
 
 static int sfd = 0;
 static int cfd = 0;
