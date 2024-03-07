@@ -2,14 +2,14 @@
 
 case "$1" in
   start)
-      echo "Start aesdsocket"
-      start-stop-daemon -S -n aesdsocket -a /usr/bin/aesdsocket -- '-d'
-      ;;
+    echo "Start aesdsocket"
+    start-stop-daemon -S -n aesdsocket -a /usr/bin/aesdsocket -- '-d'
+    ;;
   stop)
-      echo "Stop aesdsocket"
-      start-stop-daemon -K -n aesdsocket
-      ;;
+    echo "Stop aesdsocket"
+    start-stop-daemon -K -n aesdsocket
+    ;;
   *)
-      echo "Usage: $0 {start|stop}"
-      exit 1Daemon
+    echo "Usage: $0 {start|stop}"
+    exit 1
 esac
