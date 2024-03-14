@@ -17,8 +17,14 @@
 #include <time.h>
 #include "queue.h"
 
+#define USE_AESD_CHAR_DEVICE 1
+
 const static int kPort = 9000;
+#ifdef USE_AESD_CHAR_DEVICE
+const static char *kSocketData = "/dev/aesdchar";
+#else
 const static char *kSocketData = "/var/tmp/aesdsocketdata";
+#endif
 const static int kBufferStartLength = 128;
 
 static int sfd = 0;
@@ -41,7 +47,10 @@ typedef struct slistData
 }slistData_t;
 
 volatile sig_atomic_t gracefullyExit = false;
+
+#ifndef USE_AESD_CHAR_DEVICE
 pthread_mutex_t mutex;
+#endif
 
 void freeBuffers(char *recvBuffer, char *sendBuffer)
 {
@@ -138,7 +147,9 @@ void *process(void *threadParam)
       }
     }
 
+#ifndef USE_AESD_CHAR_DEVICE
     pthread_mutex_lock(&mutex);
+#endif
 
     bytesSent = write(fd, recvBuffer, strlen(recvBuffer));
 
@@ -150,7 +161,9 @@ void *process(void *threadParam)
       return threadData;
     }
 
+#ifndef USE_AESD_CHAR_DEVICE
     pthread_mutex_unlock(&mutex);
+#endif
 
     if(fdatasync(fd) == -1)
     {
@@ -209,8 +222,9 @@ void cleanup()
   {
     close(fd);
   }
-
+#ifndef USE_AESD_CHAR_DEVICE
   remove(kSocketData);
+#endif
   closelog();
 }
 
@@ -255,7 +269,9 @@ int main(int argc, char *argv[])
   slistData_t *tempNode = NULL;
   socketThreadData_t *threadData = NULL;
 
+#ifndef USE_AESD_CHAR_DEVICE
   pthread_mutex_init(&mutex, NULL);
+#endif
 
   openlog(argv[0], LOG_PID, LOG_USER);
 
@@ -310,6 +326,7 @@ int main(int argc, char *argv[])
     exit(EXIT_FAILURE);
   }
 
+#ifndef USE_AESD_CHAR_DEVICE
   if(signal(SIGALRM, appendTimestamp) == SIG_ERR)
   {
     syslog(LOG_ERR, "SIGALRM");
@@ -328,6 +345,7 @@ int main(int argc, char *argv[])
     cleanup();
     exit(EXIT_FAILURE);
   }
+#endif
 
   if((listen(sfd, 10)) != 0)
   {
