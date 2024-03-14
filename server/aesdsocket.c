@@ -228,6 +228,7 @@ void cleanup()
   closelog();
 }
 
+#ifndef USE_AESD_CHAR_DEVICE
 void appendTimestamp(int signo)
 {
   time_t t = time(NULL);
@@ -245,6 +246,7 @@ void appendTimestamp(int signo)
   }
   pthread_mutex_unlock(&mutex);
 }
+#endif
 
 static void signalHandler(int signo)
 {
@@ -356,7 +358,7 @@ int main(int argc, char *argv[])
 
   socklen_t addrlen = sizeof(addr);
 
-  fd = open(kSocketData, O_RDWR | O_CREAT | O_APPEND, 0777);
+  fd = open(kSocketData, O_RDWR | O_CREAT | O_APPEND | O_TRUNC, 0664);
 
   if(fd < 0)
   {
