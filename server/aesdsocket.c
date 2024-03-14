@@ -358,7 +358,8 @@ int main(int argc, char *argv[])
 
   socklen_t addrlen = sizeof(addr);
 
-  fd = open(kSocketData, O_RDWR | O_CREAT | O_APPEND | O_TRUNC, 0664);
+  remove(kSocketData);
+  fd = open(kSocketData, O_RDWR | O_CREAT | O_APPEND, 0777);
 
   if(fd < 0)
   {
