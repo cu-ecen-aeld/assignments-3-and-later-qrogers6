@@ -75,10 +75,9 @@ void *process(void *threadParam)
   ssize_t bytesRecv = 0;
   ssize_t bytesSent = 0;
   ssize_t bytesRead = 0;
-  int bytesProcessed = 0;
+  //int bytesProcessed = 0;
   int bufferSize = 0;
   int bufferIndex = 0;
-  off_t fileSize;
 
   while(1)
   {
@@ -151,6 +150,8 @@ void *process(void *threadParam)
     pthread_mutex_lock(&mutex);
 #endif
 
+    fd = open(kSocketData, O_RDWR | O_CREAT | O_APPEND, 0644);
+
     bytesSent = write(fd, recvBuffer, strlen(recvBuffer));
 
     if(bytesSent == -1)
@@ -161,10 +162,13 @@ void *process(void *threadParam)
       return threadData;
     }
 
+    close(fd);
+
 #ifndef USE_AESD_CHAR_DEVICE
     pthread_mutex_unlock(&mutex);
 #endif
 
+#ifndef USE_AESD_CHAR_DEVICE
     if(fdatasync(fd) == -1)
     {
       syslog(LOG_ERR, "fdatasync() failed with errno [%d]\n", errno);
@@ -172,14 +176,13 @@ void *process(void *threadParam)
       return threadData;
     }
 
-    fileSize = lseek(fd, 0, SEEK_END);
+    bytesProcessed = lseek(fd, 0, SEEK_END);
     lseek(fd, 0, SEEK_SET);
-
-    bytesProcessed = fileSize;
+#endif
 
     freeBuffers(recvBuffer, NULL);
 
-    sendBuffer = calloc((bytesProcessed + 1), sizeof(char));
+    sendBuffer = calloc(1024, sizeof(char));
 
     if(sendBuffer == NULL)
     {
@@ -189,25 +192,37 @@ void *process(void *threadParam)
       return threadData;
     }
 
-    bytesRead = read(fd, sendBuffer, bytesProcessed);
-
-    if(bytesRead == -1)
+    fd = open(kSocketData, O_RDONLY, 0444);
+    
+    while(1)
     {
-      syslog(LOG_ERR, "read() failed with errno [%d]\n", errno);
-      freeBuffers(recvBuffer, sendBuffer);
-      threadData->complete = true;
-      return threadData;
+      bytesRead = read(fd, sendBuffer, 1024);
+
+      if(bytesRead == -1)
+      {
+        syslog(LOG_ERR, "read() failed with errno [%d]\n", errno);
+        freeBuffers(recvBuffer, sendBuffer);
+        threadData->complete = true;
+        return threadData;
+      }
+
+      if(bytesRead == 0)
+      {
+        break;
+      }
+
+      bytesSent = send(threadData->cfd, sendBuffer, bytesRead, 0);
+
+      if(bytesSent == -1)
+      {
+        syslog(LOG_ERR, "send() failed with errno [%d]\n", errno);
+        freeBuffers(recvBuffer, sendBuffer);
+        threadData->complete = true;
+        return threadData;
+      }
     }
 
-    bytesSent = send(threadData->cfd, sendBuffer, bytesProcessed, 0);
-
-    if(bytesSent == -1)
-    {
-      syslog(LOG_ERR, "send() failed with errno [%d]\n", errno);
-      freeBuffers(recvBuffer, sendBuffer);
-      threadData->complete = true;
-      return threadData;
-    }
+    close(fd);
   }
 }
 
@@ -357,16 +372,6 @@ int main(int argc, char *argv[])
   }
 
   socklen_t addrlen = sizeof(addr);
-
-  remove(kSocketData);
-  fd = open(kSocketData, O_RDWR | O_CREAT | O_APPEND, 0777);
-
-  if(fd < 0)
-  {
-    syslog(LOG_ERR, "open() failed with errno [%d]\n", errno);
-    cleanup();
-    exit(EXIT_FAILURE);
-  } 
 
   while(!gracefullyExit)
   {
