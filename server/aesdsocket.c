@@ -75,7 +75,7 @@ void *process(void *threadParam)
   ssize_t bytesRecv = 0;
   ssize_t bytesSent = 0;
   ssize_t bytesRead = 0;
-  //int bytesProcessed = 0;
+  int bytesProcessed = 0;
   int bufferSize = 0;
   int bufferIndex = 0;
 
@@ -178,11 +178,13 @@ void *process(void *threadParam)
 
     bytesProcessed = lseek(fd, 0, SEEK_END);
     lseek(fd, 0, SEEK_SET);
+#else
+    bytesProcessed = 1024; // arbitrary value
 #endif
 
     freeBuffers(recvBuffer, NULL);
 
-    sendBuffer = calloc(1024, sizeof(char));
+    sendBuffer = calloc(bytesProcessed, sizeof(char));
 
     if(sendBuffer == NULL)
     {
@@ -196,7 +198,7 @@ void *process(void *threadParam)
     
     while(1)
     {
-      bytesRead = read(fd, sendBuffer, 1024);
+      bytesRead = read(fd, sendBuffer, bytesProcessed);
 
       if(bytesRead == -1)
       {
