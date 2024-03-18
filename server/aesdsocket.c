@@ -17,8 +17,14 @@
 #include <time.h>
 #include "queue.h"
 
+#define USE_AESD_CHAR_DEVICE 1
+
 const static int kPort = 9000;
+#ifdef USE_AESD_CHAR_DEVICE
+const static char *kSocketData = "/dev/aesdchar";
+#else
 const static char *kSocketData = "/var/tmp/aesdsocketdata";
+#endif
 const static int kBufferStartLength = 128;
 
 static int sfd = 0;
@@ -41,7 +47,10 @@ typedef struct slistData
 }slistData_t;
 
 volatile sig_atomic_t gracefullyExit = false;
+
+#ifndef USE_AESD_CHAR_DEVICE
 pthread_mutex_t mutex;
+#endif
 
 void freeBuffers(char *recvBuffer, char *sendBuffer)
 {
@@ -69,7 +78,6 @@ void *process(void *threadParam)
   int bytesProcessed = 0;
   int bufferSize = 0;
   int bufferIndex = 0;
-  off_t fileSize;
 
   while(1)
   {
@@ -138,7 +146,11 @@ void *process(void *threadParam)
       }
     }
 
+#ifndef USE_AESD_CHAR_DEVICE
     pthread_mutex_lock(&mutex);
+#endif
+
+    fd = open(kSocketData, O_RDWR | O_CREAT | O_APPEND, 0644);
 
     bytesSent = write(fd, recvBuffer, strlen(recvBuffer));
 
@@ -150,8 +162,13 @@ void *process(void *threadParam)
       return threadData;
     }
 
-    pthread_mutex_unlock(&mutex);
+    close(fd);
 
+#ifndef USE_AESD_CHAR_DEVICE
+    pthread_mutex_unlock(&mutex);
+#endif
+
+#ifndef USE_AESD_CHAR_DEVICE
     if(fdatasync(fd) == -1)
     {
       syslog(LOG_ERR, "fdatasync() failed with errno [%d]\n", errno);
@@ -159,14 +176,15 @@ void *process(void *threadParam)
       return threadData;
     }
 
-    fileSize = lseek(fd, 0, SEEK_END);
+    bytesProcessed = lseek(fd, 0, SEEK_END);
     lseek(fd, 0, SEEK_SET);
-
-    bytesProcessed = fileSize;
+#else
+    bytesProcessed = 1024; // arbitrary value
+#endif
 
     freeBuffers(recvBuffer, NULL);
 
-    sendBuffer = calloc((bytesProcessed + 1), sizeof(char));
+    sendBuffer = calloc(bytesProcessed, sizeof(char));
 
     if(sendBuffer == NULL)
     {
@@ -176,25 +194,37 @@ void *process(void *threadParam)
       return threadData;
     }
 
-    bytesRead = read(fd, sendBuffer, bytesProcessed);
-
-    if(bytesRead == -1)
+    fd = open(kSocketData, O_RDONLY, 0444);
+    
+    while(1)
     {
-      syslog(LOG_ERR, "read() failed with errno [%d]\n", errno);
-      freeBuffers(recvBuffer, sendBuffer);
-      threadData->complete = true;
-      return threadData;
+      bytesRead = read(fd, sendBuffer, bytesProcessed);
+
+      if(bytesRead == -1)
+      {
+        syslog(LOG_ERR, "read() failed with errno [%d]\n", errno);
+        freeBuffers(recvBuffer, sendBuffer);
+        threadData->complete = true;
+        return threadData;
+      }
+
+      if(bytesRead == 0)
+      {
+        break;
+      }
+
+      bytesSent = send(threadData->cfd, sendBuffer, bytesRead, 0);
+
+      if(bytesSent == -1)
+      {
+        syslog(LOG_ERR, "send() failed with errno [%d]\n", errno);
+        freeBuffers(recvBuffer, sendBuffer);
+        threadData->complete = true;
+        return threadData;
+      }
     }
 
-    bytesSent = send(threadData->cfd, sendBuffer, bytesProcessed, 0);
-
-    if(bytesSent == -1)
-    {
-      syslog(LOG_ERR, "send() failed with errno [%d]\n", errno);
-      freeBuffers(recvBuffer, sendBuffer);
-      threadData->complete = true;
-      return threadData;
-    }
+    close(fd);
   }
 }
 
@@ -209,11 +239,13 @@ void cleanup()
   {
     close(fd);
   }
-
+#ifndef USE_AESD_CHAR_DEVICE
   remove(kSocketData);
+#endif
   closelog();
 }
 
+#ifndef USE_AESD_CHAR_DEVICE
 void appendTimestamp(int signo)
 {
   time_t t = time(NULL);
@@ -231,6 +263,7 @@ void appendTimestamp(int signo)
   }
   pthread_mutex_unlock(&mutex);
 }
+#endif
 
 static void signalHandler(int signo)
 {
@@ -255,7 +288,9 @@ int main(int argc, char *argv[])
   slistData_t *tempNode = NULL;
   socketThreadData_t *threadData = NULL;
 
+#ifndef USE_AESD_CHAR_DEVICE
   pthread_mutex_init(&mutex, NULL);
+#endif
 
   openlog(argv[0], LOG_PID, LOG_USER);
 
@@ -310,6 +345,7 @@ int main(int argc, char *argv[])
     exit(EXIT_FAILURE);
   }
 
+#ifndef USE_AESD_CHAR_DEVICE
   if(signal(SIGALRM, appendTimestamp) == SIG_ERR)
   {
     syslog(LOG_ERR, "SIGALRM");
@@ -328,6 +364,7 @@ int main(int argc, char *argv[])
     cleanup();
     exit(EXIT_FAILURE);
   }
+#endif
 
   if((listen(sfd, 10)) != 0)
   {
@@ -337,15 +374,6 @@ int main(int argc, char *argv[])
   }
 
   socklen_t addrlen = sizeof(addr);
-
-  fd = open(kSocketData, O_RDWR | O_CREAT | O_APPEND, 0777);
-
-  if(fd < 0)
-  {
-    syslog(LOG_ERR, "open() failed with errno [%d]\n", errno);
-    cleanup();
-    exit(EXIT_FAILURE);
-  } 
 
   while(!gracefullyExit)
   {
