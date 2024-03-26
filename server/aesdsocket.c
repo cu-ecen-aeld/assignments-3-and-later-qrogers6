@@ -16,12 +16,14 @@
 #include <sys/time.h>
 #include <time.h>
 #include "queue.h"
+#include "../aesd-char-driver/aesd_ioctl.h"
 
 #define USE_AESD_CHAR_DEVICE 1
 
 const static int kPort = 9000;
 #ifdef USE_AESD_CHAR_DEVICE
 const static char *kSocketData = "/dev/aesdchar";
+const char *ioctl_str = "AESDCHAR_IOCSEEKTO:";
 #else
 const static char *kSocketData = "/var/tmp/aesdsocketdata";
 #endif
@@ -52,6 +54,8 @@ volatile sig_atomic_t gracefullyExit = false;
 pthread_mutex_t mutex;
 #endif
 
+pthread_mutex_t mutex;
+
 void freeBuffers(char *recvBuffer, char *sendBuffer)
 {
   if(recvBuffer != NULL)
@@ -78,6 +82,7 @@ void *process(void *threadParam)
   int bytesProcessed = 0;
   int bufferSize = 0;
   int bufferIndex = 0;
+  int ioctl_check;
 
   while(1)
   {
@@ -140,6 +145,40 @@ void *process(void *threadParam)
 
       *(recvBuffer + (bufferSize - 1)) = 0;
 
+      ioctl_check = strncmp(recvBuffer, ioctl_str, strlen(ioctl_str));
+
+      if(ioctl_check == 0)
+      {
+        struct aesd_seekto aesd_seekto_data;
+        sscanf(recvBuffer, "AESDCHAR_IOCSEEKTO:%d,%d", &aesd_seekto_data.write_cmd, &aesd_seekto_data.write_cmd_offset);
+
+        fd = open(kSocketData, O_RDWR | O_CREAT | O_APPEND, 0777);
+
+        if(ioctl(fd, AESDCHAR_IOCSEEKTO, &aesd_seekto_data) != 0)
+        {
+          perror("ioctl failed");
+          syslog(LOG_ERR,"ioctl failed");
+        }
+      }
+      else
+      {
+        fd = open(kSocketData, O_RDWR | O_CREAT | O_APPEND, 0777);
+
+        pthread_mutex_lock(&mutex);
+        bytesSent = write(fd, recvBuffer, strlen(recvBuffer));
+        pthread_mutex_unlock(&mutex);
+
+        if(bytesSent == -1)
+        {
+          syslog(LOG_ERR, "write() failed with errno [%d]\n", errno);
+          freeBuffers(recvBuffer, sendBuffer);
+          threadData->complete = true;
+          return threadData;
+        }
+
+        close(fd);
+      }
+
       if(strchr(recvBuffer, '\n') != NULL)
       {
         break;
@@ -149,20 +188,6 @@ void *process(void *threadParam)
 #ifndef USE_AESD_CHAR_DEVICE
     pthread_mutex_lock(&mutex);
 #endif
-
-    fd = open(kSocketData, O_RDWR | O_CREAT | O_APPEND, 0644);
-
-    bytesSent = write(fd, recvBuffer, strlen(recvBuffer));
-
-    if(bytesSent == -1)
-    {
-      syslog(LOG_ERR, "write() failed with errno [%d]\n", errno);
-      freeBuffers(recvBuffer, sendBuffer);
-      threadData->complete = true;
-      return threadData;
-    }
-
-    close(fd);
 
 #ifndef USE_AESD_CHAR_DEVICE
     pthread_mutex_unlock(&mutex);
@@ -194,7 +219,10 @@ void *process(void *threadParam)
       return threadData;
     }
 
-    fd = open(kSocketData, O_RDONLY, 0444);
+    if(ioctl_check != 0)
+    {
+      fd = open(kSocketData, O_RDONLY, 0444);
+    }
     
     while(1)
     {
