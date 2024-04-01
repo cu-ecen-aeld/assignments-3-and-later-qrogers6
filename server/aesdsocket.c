@@ -16,12 +16,16 @@
 #include <sys/time.h>
 #include <time.h>
 #include "queue.h"
+#include "../aesd-char-driver/aesd_ioctl.h"
+#include <sys/ioctl.h>
+#include <sys/stat.h>
 
 #define USE_AESD_CHAR_DEVICE 1
 
 const static int kPort = 9000;
 #ifdef USE_AESD_CHAR_DEVICE
 const static char *kSocketData = "/dev/aesdchar";
+const char kIOCtrlStr[] = "AESDCHAR_IOCSEEKTO:";
 #else
 const static char *kSocketData = "/var/tmp/aesdsocketdata";
 #endif
@@ -48,9 +52,7 @@ typedef struct slistData
 
 volatile sig_atomic_t gracefullyExit = false;
 
-#ifndef USE_AESD_CHAR_DEVICE
 pthread_mutex_t mutex;
-#endif
 
 void freeBuffers(char *recvBuffer, char *sendBuffer)
 {
@@ -78,6 +80,10 @@ void *process(void *threadParam)
   int bytesProcessed = 0;
   int bufferSize = 0;
   int bufferIndex = 0;
+  bool ioctlCmdRecv = false;
+  char *ioctlCmdStr = NULL;
+  struct aesd_seekto seekto;
+  off_t offset;
 
   while(1)
   {
@@ -96,8 +102,6 @@ void *process(void *threadParam)
 
     while(1)
     {
-      pthread_mutex_lock(threadData->mutexExit);
-
       if(threadData->exit)
       {
         freeBuffers(recvBuffer, sendBuffer);
@@ -105,8 +109,6 @@ void *process(void *threadParam)
         pthread_mutex_unlock(threadData->mutexExit);
         return threadData;
       }
-
-      pthread_mutex_unlock(threadData->mutexExit);
 
       bytesRecv = recv(threadData->cfd, recvBuffer + bufferIndex, (bufferSize - bufferIndex - 1), 0);
 
@@ -146,43 +148,64 @@ void *process(void *threadParam)
       }
     }
 
-#ifndef USE_AESD_CHAR_DEVICE
     pthread_mutex_lock(&mutex);
-#endif
 
-    fd = open(kSocketData, O_RDWR | O_CREAT | O_APPEND, 0644);
+    fd = open(kSocketData, O_RDWR | O_CREAT | O_APPEND, S_IWUSR | S_IRUSR | S_IWGRP | S_IRGRP | S_IROTH);
 
-    bytesSent = write(fd, recvBuffer, strlen(recvBuffer));
-
-    if(bytesSent == -1)
+    if(strncmp(recvBuffer, kIOCtrlStr, strlen(kIOCtrlStr)) == 0)
     {
-      syslog(LOG_ERR, "write() failed with errno [%d]\n", errno);
+      ioctlCmdRecv = true;
+      ioctlCmdStr = recvBuffer += strlen(kIOCtrlStr);
+      seekto.write_cmd = atoi(ioctlCmdStr);
+      ioctlCmdStr = strchr(ioctlCmdStr, ',');
+      ioctlCmdStr++;
+      seekto.write_cmd_offset = atoi(ioctlCmdStr);
+
+      if(ioctl(fd, AESDCHAR_IOCSEEKTO, &seekto) != 0)
+      {
+        syslog(LOG_ERR, "ioctl() failed with errno [%d]\n", errno);
+        close(fd);
+        pthread_mutex_unlock(&mutex);
+        freeBuffers(recvBuffer, sendBuffer);
+        threadData->complete = true;
+        return threadData;
+      }
+    }
+    else
+    {
+      bytesSent = write(fd, recvBuffer, strlen(recvBuffer));
+
+      if(bytesSent == -1)
+      {
+        syslog(LOG_ERR, "write() failed with errno [%d]\n", errno);
+        freeBuffers(recvBuffer, sendBuffer);
+        threadData->complete = true;
+        return threadData;
+      }
+    }
+
+    if(ioctlCmdRecv)
+    {
+      offset = lseek(fd, 0, SEEK_CUR);
+    }
+    else
+    {
+      offset = 0;
+    }
+
+    bytesProcessed = lseek(fd, 0, SEEK_END);
+
+    if(bytesProcessed == -1)
+    {
+      syslog(LOG_ERR, "lseek() failed with errno [%d]\n", errno);
+      close(fd);
+      pthread_mutex_unlock(&mutex);
       freeBuffers(recvBuffer, sendBuffer);
       threadData->complete = true;
       return threadData;
     }
 
-    close(fd);
-
-#ifndef USE_AESD_CHAR_DEVICE
-    pthread_mutex_unlock(&mutex);
-#endif
-
-#ifndef USE_AESD_CHAR_DEVICE
-    if(fdatasync(fd) == -1)
-    {
-      syslog(LOG_ERR, "fdatasync() failed with errno [%d]\n", errno);
-      threadData->complete = true;
-      return threadData;
-    }
-
-    bytesProcessed = lseek(fd, 0, SEEK_END);
-    lseek(fd, 0, SEEK_SET);
-#else
-    bytesProcessed = 1024; // arbitrary value
-#endif
-
-    freeBuffers(recvBuffer, NULL);
+    lseek(fd, offset, SEEK_SET);
 
     sendBuffer = calloc(bytesProcessed, sizeof(char));
 
@@ -193,8 +216,6 @@ void *process(void *threadParam)
       threadData->complete = true;
       return threadData;
     }
-
-    fd = open(kSocketData, O_RDONLY, 0444);
     
     while(1)
     {
@@ -225,6 +246,7 @@ void *process(void *threadParam)
     }
 
     close(fd);
+    pthread_mutex_unlock(&mutex);
   }
 }
 
